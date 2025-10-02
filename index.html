@@ -262,22 +262,39 @@ function saveRecording() {
   const thumbUrl = thumbCanvas.toDataURL("image/png");
 
   // create thumbnail element
+    // create thumbnail element with delete button
   const container = document.createElement("div");
   container.className = "recording";
 
   const img = document.createElement("img");
   img.src = thumbUrl;
+  container.appendChild(img);
+
   const playBtn = document.createElement("div");
   playBtn.className = "play-button";
-
-  container.appendChild(img);
   container.appendChild(playBtn);
+
+  // delete button
+  const delBtn = document.createElement("button");
+  delBtn.className = "closeBtn";
+  delBtn.style.top = "2px";
+  delBtn.style.right = "2px";
+  delBtn.style.fontSize = "12px";
+  delBtn.textContent = "×";
+  delBtn.onclick = (e) => {
+    e.stopPropagation(); // prevent triggering play
+    container.remove();
+    URL.revokeObjectURL(thumbUrl);
+  };
+  container.appendChild(delBtn);
+
   recordingsContainer.appendChild(container);
 
   // click thumbnail to create a new draggable video box
   container.addEventListener("click", () => {
     createDraggableVideo(blob); // pass blob directly
   });
+
 }
 
 function createDraggableVideo(blob) {
