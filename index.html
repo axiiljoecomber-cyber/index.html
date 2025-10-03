@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Auto Motion Recording Webcam</title>
+<title>Auto Motion Recording Webcam - Axiil Security</title>
 <style>
   :root {
     --bg: #0b1220;
@@ -161,9 +161,38 @@
     clip-path: polygon(20% 15%, 20% 85%, 80% 50%);
     border-radius: 4px;
   }
-</style>
+ </style>
+
+  <style>
+    .brandHeader {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      line-height: 1;
+      user-select: none;
+    }
+    .brandTitle {
+      font-size: 28px;
+      font-weight: bold;
+      color: white;
+      font-family: system-ui, sans-serif;
+    }
+    .brandSubtitle {
+      font-size: 16px;
+      color: white;
+      font-family: system-ui, sans-serif;
+      opacity: 0.8;
+    }
+  </style>
 </head>
 <body>
+  <div class="brandHeader">
+    <div class="brandTitle">Axiil</div>
+    <div class="brandSubtitle">Security</div>
+  </div>
   <div class="card">
     <div class="square" id="webcamContainer">
       <video id="webcamVideo" autoplay playsinline muted></video>
@@ -229,7 +258,42 @@ async function startCamera() {
 function startRecording() {
   if (!currentStream || isRecording || !autoRecordEnabled) return;
   recordedChunks = [];
-  recorder = new MediaRecorder(currentStream, { mimeType: "video/webm; codecs=vp9" });
+
+  // Create offscreen canvas for recording
+  const recordCanvas = document.createElement("canvas");
+  recordCanvas.width = videoEl.videoWidth || 640;
+  recordCanvas.height = videoEl.videoHeight || 480;
+  const recordCtx = recordCanvas.getContext("2d");
+
+  function drawFrame() {
+  if (!isRecording) return;
+
+  // Clear previous frame
+  recordCtx.clearRect(0, 0, recordCanvas.width, recordCanvas.height);
+
+  // Draw live video frame
+  recordCtx.drawImage(videoEl, 0, 0, recordCanvas.width, recordCanvas.height);
+
+  // Add timestamp overlay
+  const timestamp = new Date().toLocaleString();
+  recordCtx.fillStyle = "rgba(0,0,0,0.6)";
+  const textWidth = recordCtx.measureText(timestamp).width + 10;
+  recordCtx.fillRect(8, recordCanvas.height - 28, textWidth, 24);
+  recordCtx.fillStyle = "white";
+  recordCtx.font = "16px monospace";
+  recordCtx.fillText(timestamp, 12, recordCanvas.height - 10);
+
+  requestAnimationFrame(drawFrame);
+}
+
+requestAnimationFrame(drawFrame);
+
+  // Use canvas stream + add mic audio
+  const canvasStream = recordCanvas.captureStream(30);
+  const audioTrack = currentStream.getAudioTracks()[0];
+  if (audioTrack) canvasStream.addTrack(audioTrack);
+
+  recorder = new MediaRecorder(canvasStream, { mimeType: "video/webm; codecs=vp9" });
   recorder.ondataavailable = e => {
     if (e.data.size > 0) recordedChunks.push(e.data);
   };
@@ -238,6 +302,7 @@ function startRecording() {
   isRecording = true;
   statusText.textContent = "Recording (motion detected)";
 }
+
 
 function stopRecording() {
   if (recorder && isRecording) {
@@ -249,53 +314,244 @@ function stopRecording() {
 
 const recordedBlobs = [];
 
-function saveRecording() {
-  const blob = new Blob(recordedChunks, { type: "video/webm" });
-  recordedBlobs.push(blob); // store blob to allow reopening
+// --- Auto-download flag (default OFF) and dynamic toggle button ---
+// Put these near the top of your script or keep here before saveRecording is used
+let autoDownload = false;
 
-  // thumbnail
+// create a button next to the auto record button so you don't have to edit HTML
+// --- Auto record & auto download buttons setup ---
+autoRecordEnabled = true;  // Auto Record ON by default
+autoDownload = false;      // Auto Download OFF by default
+
+updateAutoUI(); // Update auto record button text
+
+(function createAutoDownloadButton() {
+  const webcamContainer = document.getElementById("webcamContainer");
+  if (!webcamContainer) return;
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.id = "autoDownloadBtn";
+  downloadBtn.textContent = "Auto-Download OFF"; // default OFF
+
+  Object.assign(downloadBtn.style, {
+    position: "absolute",
+    top: "40px", // slightly below auto record
+    right: "8px",
+    zIndex: 20,
+    background: "rgba(255,255,255,0.2)",
+    border: "none",
+    color: "white",
+    fontSize: "12px",
+    padding: "4px 8px",
+    borderRadius: "6px",
+    cursor: "pointer",
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    autoDownload = !autoDownload;
+    downloadBtn.textContent = autoDownload ? "Auto-Download ON" : "Auto-Download OFF";
+    downloadBtn.style.background = autoDownload ? "rgba(0,150,0,0.3)" : "rgba(255,255,255,0.2)";
+  });
+
+  webcamContainer.appendChild(downloadBtn);
+})();
+
+
+// helper to download blob with a safe timestamped filename
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.style.display = "none";
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 1000);
+}
+
+// helper to format filename-safe timestamp
+function filenameTimestamp(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+}
+
+// --- New saveRecording() with optional auto-download ---
+function saveRecording() {
+  // Create recording blob and store it
+  const blob = new Blob(recordedChunks, { type: "video/webm" });
+  recordedBlobs.push(blob);
+
+  // If auto-download is enabled, download immediately with timestamped filename
+  if (autoDownload) {
+    const now = new Date();
+    const fname = `recording_${filenameTimestamp(now)}.webm`;
+    try {
+      downloadBlob(blob, fname);
+    } catch (err) {
+      console.warn("auto-download failed", err);
+    }
+  }
+
+  // unique id for linking thumbnail <-> log entry
+  const rid = "rec" + Date.now() + Math.floor(Math.random() * 1000);
+
+  // --- Create thumbnail image ---
   const thumbCanvas = document.createElement("canvas");
   thumbCanvas.width = 160;
   thumbCanvas.height = 90;
   const thumbCtx = thumbCanvas.getContext("2d");
-  thumbCtx.drawImage(videoEl, 0, 0, thumbCanvas.width, thumbCanvas.height);
+  try {
+    thumbCtx.drawImage(videoEl, 0, 0, thumbCanvas.width, thumbCanvas.height);
+  } catch (err) {
+    console.warn("thumb draw failed", err);
+  }
   const thumbUrl = thumbCanvas.toDataURL("image/png");
 
-  // create thumbnail element
-    // create thumbnail element with delete button
+  // --- Container for thumbnail + label ---
   const container = document.createElement("div");
   container.className = "recording";
+  container.dataset.rid = rid;
+  Object.assign(container.style, {
+    position: "relative",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    width: "160px",
+    height: "110px",
+    boxSizing: "border-box",
+    padding: "4px 4px 6px 4px",
+    background: "#111",
+    borderRadius: "6px",
+    overflow: "hidden",
+  });
 
+  // label above thumbnail
+  const initialIndex = document.querySelectorAll(".recording").length + 1;
+  const label = document.createElement("div");
+  label.className = "recLabel";
+  label.textContent = `Video ${initialIndex}`;
+  Object.assign(label.style, {
+    width: "100%",
+    textAlign: "center",
+    fontSize: "12px",
+    color: "var(--muted)",
+    marginBottom: "4px",
+    userSelect: "none",
+  });
+  container.appendChild(label);
+
+  // image
   const img = document.createElement("img");
   img.src = thumbUrl;
+  Object.assign(img.style, {
+    width: "100%",
+    height: "90px",
+    objectFit: "cover",
+    display: "block",
+    borderRadius: "4px"
+  });
   container.appendChild(img);
 
+  // center play icon
   const playBtn = document.createElement("div");
   playBtn.className = "play-button";
+  playBtn.style.position = "absolute";
+  playBtn.style.top = "50%";
+  playBtn.style.left = "50%";
+  playBtn.style.transform = "translate(-50%, -50%)";
   container.appendChild(playBtn);
 
   // delete button
   const delBtn = document.createElement("button");
   delBtn.className = "closeBtn";
-  delBtn.style.top = "2px";
-  delBtn.style.right = "2px";
+  delBtn.style.top = "6px";
+  delBtn.style.right = "6px";
   delBtn.style.fontSize = "12px";
   delBtn.textContent = "×";
-  delBtn.onclick = (e) => {
-    e.stopPropagation(); // prevent triggering play
-    container.remove();
-    URL.revokeObjectURL(thumbUrl);
-  };
   container.appendChild(delBtn);
 
   recordingsContainer.appendChild(container);
 
-  // click thumbnail to create a new draggable video box
-  container.addEventListener("click", () => {
-    createDraggableVideo(blob); // pass blob directly
+  // --- Right-side log box (create if missing) ---
+  let logBox = document.getElementById("recordLog");
+  if (!logBox) {
+    logBox = document.createElement("div");
+    logBox.id = "recordLog";
+    Object.assign(logBox.style, {
+      position: "fixed",
+      top: "16px",
+      right: "16px",
+      width: "240px",
+      maxHeight: "calc(100vh - 32px)",
+      overflowY: "auto",
+      background: "rgba(0,0,0,0.6)",
+      color: "white",
+      padding: "8px",
+      borderRadius: "8px",
+      zIndex: 9999,
+      boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
+      fontSize: "13px",
+      lineHeight: "1.3",
+    });
+    const title = document.createElement("div");
+    title.textContent = "Record Log";
+    title.style.fontWeight = "700";
+    title.style.marginBottom = "6px";
+    logBox.appendChild(title);
+    document.body.appendChild(logBox);
+  }
+
+  // --- Log entry ---
+  const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+  const logItem = document.createElement("div");
+  logItem.className = "logItem";
+  logItem.dataset.rid = rid;
+  logItem.dataset.time = timeStr;
+  logItem.textContent = `Video ${initialIndex}: ${timeStr}`;
+  Object.assign(logItem.style, {
+    padding: "6px 6px",
+    borderTop: "1px solid rgba(255,255,255,0.06)",
+    cursor: "pointer",
+    userSelect: "none"
+  });
+  logBox.appendChild(logItem);
+
+  // --- Click handlers ---
+  logItem.addEventListener("click", () => createDraggableVideo(blob));
+  container.addEventListener("click", (e) => {
+    if (e.target === delBtn) return;
+    createDraggableVideo(blob);
   });
 
+  // --- Delete handler: remove both thumbnail and log entry, then renumber ---
+  delBtn.onclick = (e) => {
+    e.stopPropagation();
+    container.remove();
+    logItem.remove();
+    updateLabels();
+  };
+
+  function updateLabels() {
+    const containers = Array.from(document.querySelectorAll(".recording"));
+    containers.forEach((c, i) => {
+      const lab = c.querySelector(".recLabel");
+      if (lab) lab.textContent = `Video ${i + 1}`;
+      const rid = c.dataset.rid;
+      const log = document.querySelector(`#recordLog .logItem[data-rid="${rid}"]`);
+      if (log) {
+        log.textContent = `Video ${i + 1}: ${log.dataset.time}`;
+      }
+    });
+  }
+
+  updateLabels();
 }
+
+
+
 
 function createDraggableVideo(blob) {
   const box = document.createElement("div");
